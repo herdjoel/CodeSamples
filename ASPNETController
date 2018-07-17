@@ -1,0 +1,220 @@
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
+using System.Web.Http;
+using System.Regex;
+using Newtonsoft.Json;
+using SDOTSelectService.Models;
+using SDOTSelectService.Services;
+
+namespace SDOTSelectService.Controllers
+{
+    public class SelectFeaturesController : ApiController
+    {
+        /// <summary>
+        /// GET Request Handler Method. Route: api/SelectFeatures/{xParam:double}/{yParam:double}/{layerNameParam}.
+        /// </summary>
+        /// <param name="xParam">X Axis Coordinates of type Double.</param>
+        /// <param name="yParam">Y Axis Coordinates of type Double.</param>
+        /// <param name="layerNameParam">Feature Class Name.</param>
+        /// <returns>Http Response Message.</returns>
+        [Route("api/SelectFeatures/{xParam:double}/{yParam:double}/{layerNameParam}")]
+        [HttpGet]
+        public HttpResponseMessage GetWithoutWhereClause(Nullable<double> xParam, Nullable<double> yParam, String layerNameParam)
+        {
+            return GetWithWhereClause(xParam, yParam, layerNameParam, "");
+        }
+
+        /// <summary>
+        /// GET Request Handler Method. Route: api/SelectFeatures/{xParam:double}/{yParam:double}/{layerNameParam}/{whereClauseParam}.
+        /// </summary>
+        /// <param name="xParam">X Axis Coordinates of type Double.</param>
+        /// <param name="yParam">Y Axis Coordinates of type Double.</param>
+        /// <param name="layerNameParam">Feature Class Name.</param>
+        /// <param name="whereClauseParam">Optional Where Clause.</param>
+        /// <returns>Http Response Message.</returns>
+        [Route("api/SelectFeatures/{xParam:double}/{yParam:double}/{layerNameParam}/{whereClauseParam}")]
+        [HttpGet]
+        public HttpResponseMessage GetWithWhereClause(Nullable<double> xParam, Nullable<double> yParam, String layerNameParam, String whereClauseParam)
+        {
+            try
+            {
+                // Check Passed Values for Validity 
+                if (!xParam.HasValue || !yParam.HasValue || xParam <= 0 || yParam <= 0)
+                {
+                    return ErrorMessage("{\"ErrorMessage\":\"One or Both vertices are Invalid.\"}");
+                }
+                if (String.IsNullOrEmpty(layerNameParam))
+                {
+                    return ErrorMessage("{\"ErrorMessage\":\"Layer Name is Empty or Null.\"}");
+                }
+
+                // If WhereClauseParam is Null, declare as empty string
+                string whereClauseLocal = whereClauseParam;
+                if (String.IsNullOrEmpty(whereClauseLocal))
+                {
+                    whereClauseLocal = "";
+                }
+
+                // Create DAL Service Request
+                DALService DataAccessLayer = new DALService();
+                DALServiceRequest request = new DALServiceRequest()
+                {
+                    X = xParam,
+                    Y = yParam,
+                    LayerName = layerNameParam,
+                    WhereClause = whereClauseLocal
+                };
+
+                // Catch DAL Service Response
+                DALServiceResponse responseDAL = DataAccessLayer.GetKeys(request);
+
+                // If Failure, return error message
+                if (!responseDAL.Success.HasValue || responseDAL.Success == false)
+                    return ErrorMessage(responseDAL.ErrorMessage);
+
+                // Serialize JSON and return to Application
+                JsonResponse responseWebServ = new JsonResponse()
+                {
+                    Results = responseDAL.FinalResultList
+                };
+                return SuccessfulOperation(JsonConvert.SerializeObject(responseWebServ));
+            }
+            catch (Exception ex)
+            {
+                string exception = ex.ToString();
+                exception = Regex.Replace(exception, "[*`'\"]", string.Empty);
+                return ErrorMessage("{\"ErrorMessage\":\"Failed to process GET request: " + exception + "\"}");
+            }
+        }
+
+        /// <summary>
+        /// Post Requst Handler Method.
+        /// </summary>
+        /// <param name="json">JSON wrapped in an Http Request Message.</param>
+        /// <returns>Http Response Message.</returns>
+        [HttpPost]
+        public HttpResponseMessage Post(HttpRequestMessage json)
+        {
+            try
+            {
+                // Deserialize Json
+                string jsonToString = json.Content.ReadAsStringAsync().Result;
+                var requestJson = JsonConvert.DeserializeObject<JsonRequest>(jsonToString);
+
+                // Vertices extrapolated and inserted into single list
+                List<Nullable<double>> verticesList = new List<Nullable<double>>();
+                Nullable<double> x = requestJson.Geometry.X;
+                Nullable<double> y = requestJson.Geometry.Y;
+                if (x.HasValue && y.HasValue)
+                {
+                    if (x > 0 && y > 0)
+                    {
+                        verticesList.Add(x);
+                        verticesList.Add(y);
+                    }
+                    else
+                    {
+                        return ErrorMessage("{\"ErrorMessage\":\"One or Both vertices are Invalid.\"}");
+                    }
+                }
+                else if (!x.HasValue && !y.HasValue)
+                {
+                    foreach (List<Nullable<double>> list in requestJson.Geometry.Rings[0])
+                    {
+                        if (list[0].HasValue && list[1].HasValue && list[0] > 0 && list[1] > 0)
+                        {
+                            verticesList.Add(list[0]);
+                            verticesList.Add(list[1]);
+                        }
+                        else
+                        {
+                            return ErrorMessage("{\"ErrorMessage\":\"Invalid geometry passed into service.\"}");
+                        }
+                    }
+                }
+                else // If either x or y has a value but the other is null
+                {
+                    return ErrorMessage("{\"ErrorMessage\":\"One or Both vertices are Invalid.\"}");
+                }
+
+                // Check for valid geometry
+                if ((verticesList.Count < 8 && verticesList.Count > 2) || // If a Polygon, then first point must equal last point
+                    (verticesList[0] != verticesList[verticesList.Count - 2] || 
+                    verticesList[1] != verticesList[verticesList.Count - 1]) ||
+                    verticesList.Count % 2 != 0) // Or if odd number of values is passed 
+                {
+                    return ErrorMessage("{\"ErrorMessage\":\"Invalid geometry passed into service.\"}");
+                }
+
+                // Make list of Layers and Where Clauses
+                List<String> layersList = new List<String>();
+                List<String> whereClauseList = new List<String>();
+                string whereClause = "";
+                foreach (Layer lay in requestJson.Layers)
+                {
+                    layersList.Add(lay.Name);
+                    whereClause = lay.WhereClause;
+                    // Make sure Where Clause is not Null
+                    if (String.IsNullOrEmpty(whereClause))
+                    {
+                        whereClause = "";
+                    }
+                    whereClauseList.Add(whereClause);
+                }
+
+                // Create DAL Service Request
+                DALService DataAccessLayer = new DALService();
+                DALServiceRequest request = new DALServiceRequest()
+                {
+                    VertexList = verticesList,
+                    LayerNameList = layersList,
+                    WhereClauseList = whereClauseList
+                };
+
+                // Catch DAL Service Response
+                DALServiceResponse responseDAL = DataAccessLayer.GetKeys(request);
+
+                // If Failure, return error message
+                if (!responseDAL.Success.HasValue || responseDAL.Success == false)
+                    return ErrorMessage(responseDAL.ErrorMessage);
+
+                // Serialize JSON and return to Application
+                JsonResponse responseWebServ = new JsonResponse()
+                {
+                    Results = responseDAL.FinalResultList
+                };
+                return SuccessfulOperation(JsonConvert.SerializeObject(responseWebServ));
+            }
+            catch (Exception ex)
+            {
+                string exception = ex.ToString();
+                exception = Regex.Replace(exception, "[*`'\"]", string.Empty);
+                return ErrorMessage("{\"ErrorMessage\":\"Failed to process POST request: " + exception + "\"}");
+            }
+        }
+
+        // Failure Message to Application with packaged Json
+        private HttpResponseMessage ErrorMessage(string json)
+        {
+            var resp = new HttpResponseMessage()
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+            resp.StatusCode = (HttpStatusCode)400;
+            return resp;
+        }
+
+        // Success Message to Application with packaged Json
+        private HttpResponseMessage SuccessfulOperation(string json)
+        {
+            var resp = new HttpResponseMessage()
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+            resp.StatusCode = (HttpStatusCode)200;
+            return resp;
+        }
+    }
+}
