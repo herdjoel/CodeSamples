@@ -1,0 +1,104 @@
+-- This package will be executed for every layer that is passed into the web service
+-- Therefore, the parameters will accept one layer_name, one key_name (ex: STUDY_ID),
+-- and return one list of numbers which will represent the keys
+
+CREATE OR REPLACE PACKAGE SDOT_FEATURE_SELECT_PKG 
+-- ****************************************************************************
+-- Package Name: SDOT_FEATURE_SELECT_PKG
+-- Purpose: Recieves geometry and layer names and returns list of primary keys
+--
+-- Version Date        By          Statement
+-- 1.001   09/01/2017  Joel Herd   Initial release.
+-- ****************************************************************************
+AS
+  TYPE R_CURSOR IS REF CURSOR;
+  TYPE VERT_ARRAY IS TABLE OF VARCHAR2(32767) INDEX BY PLS_INTEGER;
+
+  PROCEDURE GET_SDOT_SELECT_FEATURE (
+      VERTICES IN SDOT_FEATURE_SELECT_PKG.VERT_ARRAY, 
+      LAYER_NAME IN VARCHAR2,
+      KEY_NAME IN VARCHAR2,
+      WHERE_CLAUSE IN VARCHAR2,
+      PRIM_KEYS_LIST OUT SDOT_FEATURE_SELECT_PKG.R_CURSOR
+  );
+END SDOT_FEATURE_SELECT_PKG;
+/
+SHOW ERRORS
+
+
+CREATE OR REPLACE PACKAGE BODY SDOT_FEATURE_SELECT_PKG 
+-- ****************************************************************************
+-- Package Name: SDOT_FEATURE_SELECT_PKG
+-- Purpose: Recieves geometry and layer names and returns list of primary keys
+--
+-- Version Date        By          Statement
+-- 1.001   09/01/2017  Joel Herd   Initial release.
+-- ****************************************************************************
+AS
+PROCEDURE GET_SDOT_SELECT_FEATURE (VERTICES IN SDOT_FEATURE_SELECT_PKG.VERT_ARRAY, 
+                                    LAYER_NAME IN VARCHAR2,
+                                    KEY_NAME IN VARCHAR2,
+                                    WHERE_CLAUSE IN VARCHAR2,
+                                    PRIM_KEYS_LIST OUT SDOT_FEATURE_SELECT_PKG.R_CURSOR) IS 
+  VERT_LENGTH NUMBER;
+  SEARCH_QUERY VARCHAR2(8192);
+  VERT_AS_STRING VARCHAR2(8192);
+  WHERE_CLAUSE_ADJ VARCHAR2(8192);
+  WHERE_LENGTH NUMBER;
+  IND_VAL BINARY_INTEGER;
+
+BEGIN
+	WHERE_LENGTH := LENGTH(WHERE_CLAUSE);
+	IF (WHERE_LENGTH) > 0 THEN
+		WHERE_CLAUSE_ADJ := ' AND ' || WHERE_CLAUSE;
+	ELSE
+		WHERE_CLAUSE_ADJ := '';
+	END IF;
+
+    VERT_LENGTH := VERTICES.COUNT;
+
+	IF (VERT_LENGTH > 2) THEN
+		IND_VAL := VERTICES.FIRST;
+		WHILE (IND_VAL IS NOT NULL) LOOP
+			VERT_AS_STRING := VERT_AS_STRING || ',' || VERTICES(IND_VAL);
+			IND_VAL := VERTICES.NEXT(IND_VAL);
+		END LOOP;
+		VERT_AS_STRING := LTRIM(VERT_AS_STRING, ',');
+		SEARCH_QUERY := (
+		'SELECT ' 
+		|| KEY_NAME 
+		|| ' FROM ' 
+		|| LAYER_NAME 
+		|| ' l WHERE MDSYS.SDO_RELATE(l.Shape, MDSYS.SDO_GEOMETRY(2003, 2926, NULL, SDO_ELEM_INFO_ARRAY(1, 1003, 1), MDSYS.SDO_ORDINATE_ARRAY(' 
+		|| VERT_AS_STRING
+		|| ')), ''mask=ANYINTERACT querytype=window'') = ''TRUE'''
+		|| WHERE_CLAUSE_ADJ);
+	ELSE
+		SEARCH_QUERY := (
+		'SELECT ' 
+		|| KEY_NAME 
+		|| ' FROM ' 
+		|| LAYER_NAME 
+		|| ' l WHERE MDSYS.SDO_RELATE(l.SHAPE, MDSYS.SDO_GEOMETRY(''MULTIPOINT((' 
+		|| VERTICES(1) || ' ' || VERTICES(2)
+		|| '))'', 2926), ''mask=ANYINTERACT'') = ''TRUE'''
+		|| WHERE_CLAUSE_ADJ);
+	END IF;
+
+  	-- OPEN PRIM_KEYS_LIST FOR SELECT * FROM TABLE VERTICES; 
+
+    OPEN PRIM_KEYS_LIST FOR SEARCH_QUERY;
+--      SELECT key_name FROM layer_name l 
+--      WHERE SDO_RELATE(l.Shape, geom, 'mask=ANYINTERACT querytype=window') = 'TRUE' AND WHERE_CLAUSE; 
+--		OPEN cur(layer_name, key_name, where_clause, geom);
+--		LOOP
+--			FETCH cur INTO keys_list;
+--			EXIT WHEN cur%NOTFOUND;
+--		END LOOP;
+--		CLOSE cur;
+END GET_SDOT_SELECT_FEATURE;
+END SDOT_FEATURE_SELECT_PKG;
+/
+SHOW ERRORS
+
+grant execute on SDOT_FEATURE_SELECT_PKG to gisuser;
