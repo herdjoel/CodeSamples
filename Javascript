@@ -1,0 +1,409 @@
+define(["esri/Graphic",
+        "esri/widgets/Popup",
+        "esri/PopupTemplate",
+        "esri/geometry/Point"
+],
+function (Graphic, Popup, PopupTemplate, Point) {
+    return {
+        fetchAttributeData: function(response, currentLayers, theMapView, event) {
+            
+            var id_list = {
+                "Catch Basins" : 0,  // DWW
+                "Creek Watershed" : 101,
+                "DWW Abandoned Mainline" : [65, 66],
+                "DWW CCTV" : [48, 49],
+                "DWW Combined Sewer Overflows" : [87, 88],
+                "DWW Ditches and Culverts" : 56,
+                "DWW Drainage Mainline End Points" : 25,
+                "DWW Force Mainline" : 57,
+                "DWW Green Storm Infrastructure" : [90, 92, 93, 94, 95],
+                "DWW King County Drainage Mainlines (Probable Flow)" : 59,
+                "DWW King County Sewer Mainlines (Probable Flow)" : 62,
+                "DWW Mainline Connection Points" : 21,
+                "DWW Mainline Detention Systems" : [97, 98],
+                "DWW Mainline Misc Structures" : 99,
+                "DWW Monitoring Assets" : 17,
+                "DWW Pond" : 100,
+                "DWW Private Drainage Mainlines (Probable Flow)" : 61,
+                "DWW Private Sewer Mainlines (Probable Flow)" : 58,
+                "DWW SPU Drainage Mainline (Probable Flow)" : 63,
+                "DWW SPU Sewer Mainlines (Probable Flow)" : 60,
+                "DWW Sandboxes" : 22,
+                "DWW Sewer Mainline End Points" : 24,
+                "DWW Side Sewers and Laterals" : 54,
+                "DWW Special Conditions" : [51, 52],
+                "DWW Surface Drainage Curbs and Gutters" : 53,
+                "DWW Trash Rack" :  20,
+                "King County Industrial Waste Discharge Site" : 23,
+                "Rain Gage" : 18,
+                "SPU Pump Station" : 19,
+                "Surface Drainage" : 85,
+                "Urban Watercourses" : 55,
+
+                "Critical Water Services" : 16,  // WTR
+                "Modeled Hydrants" : 10,
+                "Sample Station" : 9,
+                "Water Abandoned Infrastructure" : [26, 40, 41],
+                "Water High Impact Shutdown Blocks" : [71, 72, 74, 75],
+                "Water Mainlines" : [36, 37, 38],
+                "Water Map Book Index" : 68,
+                "Water Pressure Zones" : 67,
+                "Water Proposed Infrastructure" : [32, 33, 34],
+                "Water Services" : 30,
+                "Water Special Conditions" : [28, 29],
+                "Water Structures" : [6, 7],
+                "Water Valve Functions" : 4,
+                "Water Valve Types" : [2, 3],
+
+                "Bridge" : [45, 46],  // MISC
+                "Critical Areas" : [82, 83, 84],
+                "Environmental Hazardous Sites" : [12, 13, 14, 15],
+                "Franchise Utility Map Data" : [78, 79, 80, 81],
+                "Pavement Surface (Primary)" : 43,
+                "Topography" : 42,
+                "Traffic Camera" : 8,
+            };
+
+            // Script Starts Here
+            var cl_graphics = [];
+            var layerList = [];
+            var xCoord = response.results[0].mapPoint.x;
+            var yCoord = response.results[0].mapPoint.y;
+            var layer = null;
+            var schema = null;
+            var layerName = null;
+            var trimmedLayerName = null;
+            var scale = theMapView.scale;
+
+            // Organize data into three lists for calling against all three services independently 
+            for (var i = 0; i < response.results.length; i++) {
+                layer = response.results[i];
+                schema = layer.graphic.layer.id;
+                var c_graphic = layer.graphic;
+
+                // check to see if result belongs to a cluster layer
+                if ((schema == "dwwCalls") || (schema == "waterCalls") || (schema == "dwwWOs") || (schema == "waterWOs")) {
+                    var numClones = response.results[i].graphic.attributes.count;
+                    if (numClones > 1) {
+                       for (var c = 1; c <= numClones; c++) {
+                           var newc_graphic = c_graphic.clone();
+                           newc_graphic.attributes.clstrIdx = c;
+                           cl_graphics.push(newc_graphic);
+                       }
+                    }
+                    else {
+                       cl_graphics.push(response.results[i].graphic);
+                    }
+                }
+            }
+
+            if (currentLayers.length > 0 && response.results.length > 1 && !(response.results[0].graphic.attributes.layerName.includes("Points of interest"))) 
+            {
+                var ids = [];
+                var lay_names = [];
+                for (var i = 0; i < currentLayers.length; i++) {
+                    var cur_layer_name = currentLayers[i];
+                    if (cur_layer_name != "DWW Work Orders" && cur_layer_name != "Water Work Orders" && cur_layer_name != "DWW Vehicles" 
+                                                            && cur_layer_name != "DWW Service Requests" && cur_layer_name != "Water Vehicles"
+                                                            && cur_layer_name != "Water Service Requests" && cur_layer_name != null) {
+                        if (Array.isArray(id_list[cur_layer_name])) {
+                            for (var item = 0; item < id_list[cur_layer_name].length; item++) {
+                                if (id_list[cur_layer_name][item] != null) {
+                                    ids.push(id_list[cur_layer_name][item]);
+                                    lay_names.push(cur_layer_name);
+                                }
+                            }
+                        } else {
+                            if (id_list[cur_layer_name] != null) {
+                                ids.push(id_list[cur_layer_name]);
+                                lay_names.push(cur_layer_name);
+                            }
+                        }
+                    }
+                }
+                if (ids.length > 0) {
+                    return restRequest(ids, xCoord, yCoord, cl_graphics, response, lay_names, scale);
+                } else {
+                    theMapView.popup.open({
+                        features: cl_graphics,
+                        location: event.mapPoint
+                    });
+                }
+            } else if (cl_graphics.length > 0) {
+                theMapView.popup.open({
+                    features: cl_graphics,
+                    location: event.mapPoint
+                });
+            }
+        },
+
+        tempId: function (response, currentLayers, theMapView, event) {
+            var cl_graphics = [];
+            var ids = [];
+
+            for (var i = 0; i < response.results.length; i++) {
+                var c_graphic = response.results[i].graphic;
+
+                // check to see if result belongs to a cluster layer
+                var glyrId = response.results[i].graphic.layer.id;
+                if ((glyrId == "dwwCalls") || (glyrId == "waterCalls") || (glyrId == "dwwWOs") || (glyrId == "waterWOs")) {
+
+                    var numClones = response.results[i].graphic.attributes.count;
+                    if (numClones > 1) {
+                        for (var c = 1; c <= numClones; c++) {
+                            var newc_graphic = c_graphic.clone();
+                            newc_graphic.attributes.clstrIdx = c;
+                            cl_graphics.push(newc_graphic);
+                        }
+                    }
+                    else {
+                        cl_graphics.push(response.results[i].graphic);
+                    }
+
+                }
+                else if ((glyrId == "dwwAvl") || (glyrId == "wtrAvl")) {
+                    cl_graphics.push(response.results[i].graphic);
+                   
+                }
+                else {
+                    // call the infrastructure attributes method
+                    var id_list = {
+                        "Catch Basins": 0,  // DWW
+                        "Creek Watershed": 101,
+                        "DWW Abandoned Mainline": [65, 66],
+                        "DWW CCTV": [48, 49],
+                        "DWW Combined Sewer Overflows": [87, 88],
+                        "DWW Ditches and Culverts": 56,
+                        "DWW Drainage Mainline End Points": 25,
+                        "DWW Force Mainline": 57,
+                        "DWW Green Storm Infrastructure": [90, 92, 93, 94, 95],
+                        "DWW King County Drainage Mainlines (Probable Flow)": 59,
+                        "DWW King County Sewer Mainlines (Probable Flow)": 62,
+                        "DWW Mainline Connection Points": 21,
+                        "DWW Mainline Detention Systems": [97, 98],
+                        "DWW Mainline Misc Structures": 99,
+                        "DWW Monitoring Assets": 17,
+                        "DWW Pond": 100,
+                        "DWW Private Drainage Mainlines (Probable Flow)": 61,
+                        "DWW Private Sewer Mainlines (Probable Flow)": 58,
+                        "DWW SPU Drainage Mainline (Probable Flow)": 63,
+                        "DWW SPU Sewer Mainlines (Probable Flow)": 60,
+                        "DWW Sandboxes": 22,
+                        "DWW Sewer Mainline End Points": 24,
+                        "DWW Side Sewers and Laterals": 54,
+                        "DWW Special Conditions": [51, 52],
+                        "DWW Surface Drainage Curbs and Gutters": 53,
+                        "DWW Trash Rack": 20,
+                        "King County Industrial Waste Discharge Site": 23,
+                        "Rain Gage": 18,
+                        "SPU Pump Station": 19,
+                        "Surface Drainage": 85,
+                        "Urban Watercourses": 55,
+
+                        "Critical Water Services": 16,  // WTR
+                        "Modeled Hydrants": 10,
+                        "Sample Station": 9,
+                        "Water Abandoned Infrastructure": [26, 40, 41],
+                        "Water High Impact Shutdown Blocks": [71, 72, 74, 75],
+                        "Water Mainlines": [36, 37, 38],
+                        "Water Map Book Index": 68,
+                        "Water Pressure Zones": 67,
+                        "Water Proposed Infrastructure": [32, 33, 34],
+                        "Water Services": 30,
+                        "Water Special Conditions": [28, 29],
+                        "Water Structures": [6, 7],
+                        "Water Valve Functions": 4,
+                        "Water Valve Types": [2, 3],
+
+                        "Bridge": [45, 46],  // MISC
+                        "Critical Areas": [82, 83, 84],
+                        "Environmental Hazardous Sites": [12, 13, 14, 15],
+                        "Franchise Utility Map Data": [78, 79, 80, 81],
+                        "Pavement Surface (Primary)": 43,
+                        "Topography": 42,
+                        "Traffic Camera": 8,
+                    };
+
+                    // Script Starts Here
+                    //var cl_graphics = [];
+                    var layerList = [];
+                    var xCoord = response.results[0].mapPoint.x;
+                    var yCoord = response.results[0].mapPoint.y;
+                    var layer = null;
+                    var schema = null;
+                    var layerName = null;
+                    var trimmedLayerName = null;
+                    var scale = mapVw.scale;
+
+                    // Organize data into three lists for calling against all three services independently 
+                    for (var i = 0; i < response.results.length; i++) {
+                        layer = response.results[i];
+                        schema = layer.graphic.layer.id;
+                        var c_graphic = layer.graphic;
+                    }
+
+                    //if ((currentLayers.length > 0) && (response.results.length > 0) && (!(response.results[0].graphic.attributes.layerName.includes("Points of interest")))) {
+                    if ((currentLayers.length > 0) && (response.results.length > 0))
+                    {
+                        ids = [];
+                        var lay_names = [];
+                        for (var i = 0; i < currentLayers.length; i++)
+                        {
+                            var cur_layer_name = currentLayers[i];
+                            if (cur_layer_name != "DWW Work Orders" && cur_layer_name != "Water Work Orders" && cur_layer_name != "DWW Vehicles"
+                                                                    && cur_layer_name != "DWW Service Requests" && cur_layer_name != "Water Vehicles"
+                                                                    && cur_layer_name != "Water Service Requests" && cur_layer_name != null)
+                            {
+                                if (Array.isArray(id_list[cur_layer_name]))
+                                {
+                                    for (var item = 0; item < id_list[cur_layer_name].length; item++)
+                                    {
+                                        if (id_list[cur_layer_name][item] != null)
+                                        {
+                                            ids.push(id_list[cur_layer_name][item]);
+                                            lay_names.push(cur_layer_name);
+                                        }
+                                    }
+                                } else
+                                {
+                                    if (id_list[cur_layer_name] != null)
+                                    {
+                                        ids.push(id_list[cur_layer_name]);
+                                        lay_names.push(cur_layer_name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+
+            //
+            if (ids.length > 0)
+            {
+                $.when(restRequest(ids, xCoord, yCoord, cl_graphics, response, lay_names, scale)).done(function (attributeArray) {
+                      theMapView.popup.open({
+                        features: cl_graphics,
+                        location: event.mapPoint
+                    });
+                })
+            }
+            else
+            {
+                if (cl_graphics.length > 0)
+                {
+                    theMapView.popup.open({
+                        features: cl_graphics,
+                        location: event.mapPoint
+                    });
+                }
+            }
+        }
+    }
+
+
+    // Request to Map Service
+    function restRequest(ids_list, x, y, cl_grphcs, rsponse, lay_name_list, scale) {
+        var def = $.Deferred();
+        var attrGrphcs = [];
+
+        var buffer = scale / 120;
+        var proxyUrl = fomsBaseUrl + "esriproxy/proxy.ashx?"
+        var getUrl = proxyUrl + idUrl;
+        for (var i = 0; i < ids_list.length; i++) {
+            getUrl += "\"" + ids_list[i] + "\":\"1=1\",";
+        }
+        getUrl = getUrl.substring(0, getUrl.length - 1) + "}&geometry=" + (x - buffer) + "," + (y - buffer) + "," + (x + buffer) + "," + (y + buffer)
+                                                        + "&geometryType=esriGeometryEnvelope"
+                                                        + "&spatialRel=esriSpatialRelIntersects"
+                                                        + "&f=pjson";
+        console.log(getUrl);
+        $.when(
+            $.ajax({
+                type: 'Get',
+                url: getUrl,
+                accepts: "json",
+                success: function (result) {
+                    //return formatDataHTML(result, rsponse, cl_grphcs, lay_name_list, x, y);
+                    attrGrphcs = formatDataHTML(result, rsponse, cl_grphcs, lay_name_list, x, y);
+                },
+                error: function (error, ioArgs) {
+                    console.log(ioArgs);
+                    console.log(error);
+                    //return cl_grphcs;
+                },
+                complete: function () {
+                    //def.resolve(attrGrphcs);
+                    //return def.promise();
+                }
+            }).then(function () {
+                def.resolve(attrGrphcs);
+                
+            }));
+
+        return def.promise();
+    }
+
+    // Deserialize Json response and translate to HTML for Popups
+    function formatDataHTML(map_ser_response, click_response, cl_gr, lay_list, x, y) {
+        var attributeData = {};
+        var parsed_response = JSON.parse(map_ser_response);
+        console.log(parsed_response);
+        var response_layers = parsed_response.layers;
+
+        for (var j = 0; j < response_layers.length; j++) {
+            if (response_layers[j].features.length > 0) {
+                var layer_name = lay_list[j];
+                var fields = response_layers[j].fields;
+                attributeData[layer_name] = [];
+                if (layer_name == "Traffic Camera") {
+                    var imgHtm = "<img src='" + response_layers[j].features[0].attributes.url + "' />"
+                    attributeData[layer_name].push(imgHtm);
+                }
+                else {
+                    for (var l = 0; l < response_layers[j].features.length; l++) {
+                        var attrib = $.map(response_layers[j].features[l].attributes, function (value, index) {
+                            return [value];
+                        });
+                        var cur_html = "<table>";
+                        for (var k = 0; k < fields.length; k++) {
+                            var name = fields[k].name;
+                            var alias = fields[k].alias;
+                            if (alias == null) {
+                                alias = name;
+                            }
+                            var value = attrib[k];
+                            cur_html += "<tr valign='top'><td><b>" + alias + ":</b></td><td>" + value + "</td></tr>";
+                        }
+                        cur_html += "</table>";
+
+                        attributeData[layer_name].push(cur_html);
+                    }
+                }
+                
+            }
+        }
+
+        // Add HTML to cl_graphics
+        for (var key in attributeData) {
+            if (attributeData.hasOwnProperty(key)) {
+                for (var m = 0; m < attributeData[key].length; m++) {
+                    var gr = new Graphic({
+                        //geometry: event.mapPoint
+                        geometry: new Point({"x": x, "y":y})
+                    });
+                    var attrs = attributeData[key][m];
+                    gr.popupTemplate = {
+                        title: key,
+                        content: attrs
+                    }
+                    cl_gr.push(gr);
+                }
+            }
+        }
+        return cl_gr
+
+    }
+
+});
