@@ -1,0 +1,261 @@
+using System;
+using System.Collections.Generic;
+using System.Regex;
+using Oracle.DataAccess.Client;
+using SDOTSelectService.Models;
+
+namespace SDOTSelectService.Services
+{
+    public class DALService
+    {
+        /// <summary>
+        /// Data Access Layer. Packages and Executes call to SQL Package and returns primary key results.
+        /// </summary>
+        /// <param name="serviceRequest"></param>
+        /// <returns></returns>
+        public DALServiceResponse GetKeys(DALServiceRequest serviceRequest)
+        {
+            DALServiceResponse response = new DALServiceResponse()
+            {
+                FinalResultList = new List<Dictionary<String, List<String>>>()
+            };
+            try
+            {
+                // Open Web.config and fetch DB Connection String and Stored Procedure Command Text
+                WebConfigService webConfig = new WebConfigService();
+                WebConfigServiceRequest configRequest = new WebConfigServiceRequest()
+                {
+                    Path = 1
+                };
+                configRequest = webConfig.SetUpWebConfig(configRequest);
+                System.Configuration.ConnectionStringSettings constr = configRequest.DBConnectionString;
+                string commandText = configRequest.CommandText;
+
+                // Open DB Connection
+                using (OracleConnection conn = new OracleConnection(constr.ToString()))
+                {
+                    if (conn.State == System.Data.ConnectionState.Closed)
+                        conn.Open();
+
+                    // Initialize Vertices
+                    string[] verticesArray = InitVertArray(serviceRequest);
+                    if (verticesArray == null || verticesArray.Length == 0)
+                        return FailedRequest(response, "{\"ErrorMessage\":\"Vertices failed to initialize.\"}");
+
+                    // Put together Layers List
+                    string[] layersArray = InitLayersArray(serviceRequest);
+                    if (layersArray == null || layersArray.Length == 0)
+                        return FailedRequest(response, "{\"ErrorMessage\":\"Layers failed to initialize.\"}");
+
+                    // Put together Where Clause List
+                    string[] whereClauseArray = InitWhereClauseArray(serviceRequest);
+                    if (whereClauseArray == null || whereClauseArray.Length == 0)
+                        return FailedRequest(response, "{\"ErrorMessage\":\"Where Clauses failed to initialize.\"}");
+
+                    if (layersArray.Length != whereClauseArray.Length)
+                        return FailedRequest(response, "{\"ErrorMessage\":\"Unmatched Layer/Where Clause Request.\"}");
+
+                    for (int i = 0; i < layersArray.Length; i++)
+                    {
+                        List<String> keysList = new List<String>();
+                        Dictionary<String, List<String>> result = new Dictionary<String, List<String>>();
+                        List<String> layerNameList = new List<String>();
+
+                        string layerName = layersArray[i];
+                        string whereClause = whereClauseArray[i];
+
+                        // Fetch the KeyName from AppSettings using the LayerName
+                        WebConfigServiceRequest featureKeyRequest = new WebConfigServiceRequest()
+                        {
+                            FeatureClass = layerName
+                        };
+                        featureKeyRequest = webConfig.SetUpWebConfig(featureKeyRequest);
+                        string primaryKeyName = featureKeyRequest.PrimaryKeyName;
+                        if (String.IsNullOrEmpty(primaryKeyName))
+                        {
+                            primaryKeyName = "COMPKEY";
+                        }
+
+                        if (primaryKeyName != "PASS") // Flagged Feature Classes will throw Error
+                        {
+                            // Initialize list of parameters
+                            List<OracleParameter> paramList = InitPackageParams(verticesArray, layerName, primaryKeyName, whereClause);
+
+                            // Bind the size of each element in the array
+                            paramList[0].ArrayBindSize = new int[verticesArray.Length];
+                            for (int j = 0; j < verticesArray.Length; j++)
+                            {
+                                paramList[0].ArrayBindSize[j] = 32;
+                            }
+
+                            OracleCommand cmd = conn.CreateCommand();
+                            cmd.Parameters.AddRange(paramList.ToArray());
+
+                            // Initialize Ref Cursor OUT Parameter
+                            OracleParameter cursor = cmd.Parameters.Add(
+                                new OracleParameter
+                                {
+                                    ParameterName = "PRIM_KEYS_LIST",
+                                    Direction = System.Data.ParameterDirection.Output,
+                                    OracleDbType = OracleDbType.RefCursor
+                                }
+                            );
+                            cmd.CommandText = commandText;
+                            cmd.CommandType = System.Data.CommandType.StoredProcedure;
+                            cmd.ExecuteNonQuery();
+                            using (OracleDataReader reader = cmd.ExecuteReader())
+                            {
+                                if (reader.HasRows)
+                                {
+                                    while (reader.Read())
+                                    {
+                                        String key = reader.GetValue(0).ToString();
+                                        keysList.Add(key);
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            return FailedRequest(response, "{\"ErrorMessage\":\"Feature Class marked as invalid passed into service.\"}");
+                        }
+
+                        // Append results onto final data set
+                        layerNameList.Add(layerName);
+                        result["layerName"] = layerNameList;
+                        if (keysList.Count == 0)
+                        {
+                            keysList.Add("");
+                        }
+                        result[primaryKeyName] = keysList;
+                        response.FinalResultList.Add(result);
+                    }
+                }
+            }
+            catch (TimeoutException ex)
+            {
+                string exception = ex.ToString();
+                exception = Regex.Replace(exception, "[*`'\"]", string.Empty);
+                return FailedRequest(response, "{\"ErrorMessage\":\"Oracle threw a Timeout Exception: " + exception + "\"}");
+            }
+            catch (Exception ex)
+            {
+                string exception = ex.ToString();
+                exception = Regex.Replace(exception, "[*`'\"]", string.Empty);
+                return FailedRequest(response, "{\"ErrorMessage\":\"Oracle threw an Exception: " + exception + "\"}");
+            }
+            return SuccessfulRequest(response);
+        }
+
+        private string[] InitVertArray(DALServiceRequest serviceRequest)
+        {
+            string[] verticesArray = null;
+            if (serviceRequest.X.HasValue || serviceRequest.Y.HasValue)
+            {
+                verticesArray = new string[2] { serviceRequest.X.ToString(), serviceRequest.Y.ToString() };
+            }
+            else
+            {
+                int index = 0;
+                verticesArray = new string[serviceRequest.VertexList.Count];
+                foreach (double vertex in serviceRequest.VertexList)
+                {
+                    verticesArray[index] = vertex.ToString();
+                    index++;
+                }
+            }
+            return verticesArray;
+        }
+
+        private string[] InitLayersArray(DALServiceRequest serviceRequest)
+        {
+            string[] layersArray = null;
+            if (!String.IsNullOrEmpty(serviceRequest.LayerName))
+            {
+                layersArray = new string[1] { serviceRequest.LayerName };
+            }
+            else
+            {
+                int index = 0;
+                layersArray = new string[serviceRequest.LayerNameList.Count];
+                foreach (string layer in serviceRequest.LayerNameList)
+                {
+                    layersArray[index] = layer;
+                    index++;
+                }
+            }
+            return layersArray;
+        }
+
+        private string[] InitWhereClauseArray(DALServiceRequest serviceRequest)
+        {
+            string[] whereClauseArray = null;
+            if (serviceRequest.WhereClause != null)
+            {
+                whereClauseArray = new string[1] { serviceRequest.WhereClause };
+            }
+            else
+            {
+                int index = 0;
+                whereClauseArray = new string[serviceRequest.WhereClauseList.Count];
+                foreach (string clause in serviceRequest.WhereClauseList)
+                {
+                    whereClauseArray[index] = clause;
+                    index++;
+                }
+            }
+            return whereClauseArray;
+        }
+
+        private List<OracleParameter> InitPackageParams(string[] verticesArray, string layerName, string primaryKeyName, string whereClause)
+        {
+            List<OracleParameter> paramList = new List<OracleParameter>
+            {
+                new OracleParameter()
+                {
+                    ParameterName = "VERTICES",
+                    Direction = System.Data.ParameterDirection.Input,
+                    OracleDbType = OracleDbType.Varchar2,
+                    CollectionType = OracleCollectionType.PLSQLAssociativeArray,
+                    Value = verticesArray,
+                    Size = verticesArray.Length
+                },
+                new OracleParameter()
+                {
+                    ParameterName = "LAYER_NAME",
+                    Direction = System.Data.ParameterDirection.Input,
+                    OracleDbType = OracleDbType.Varchar2,
+                    Value = layerName
+                },
+                new OracleParameter()
+                {
+                    ParameterName = "KEY_NAME",
+                    Direction = System.Data.ParameterDirection.Input,
+                    OracleDbType = OracleDbType.Varchar2,
+                    Value = primaryKeyName
+                },
+                new OracleParameter()
+                {
+                    ParameterName = "WHERE_CLAUSE",
+                    Direction = System.Data.ParameterDirection.Input,
+                    OracleDbType = OracleDbType.Varchar2,
+                    Value = whereClause
+                }
+            };
+            return paramList;
+        }
+
+        private DALServiceResponse SuccessfulRequest(DALServiceResponse response)
+        {
+            response.Success = true;
+            return response;
+        }
+
+        private DALServiceResponse FailedRequest(DALServiceResponse response, string Error)
+        {
+            response.Success = false;
+            response.ErrorMessage = Error;
+            return response;
+        }
+    }
+}
