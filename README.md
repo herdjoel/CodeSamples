@@ -2,7 +2,7 @@
 Samples of some of the work that I've done.
 
 ## Python
-> The Python sample is an ETL process for [Seattle's 700 Gallons project](https://www.700milliongallons.org/) which pulls together data from multiple departments and compiles it into a single 'mega' table.
+> The Python sample is an ETL process for loading Hosted (static) Feature and Vector Tile services into ESRI's ArcGIS Portal. The process is written in Python 3.6.
 
 ## .NET
 > The Controller and Data Access Layer Service I've posted are part of a web service which is hit with parameters of an X and Y coordinate from the state plane, and return data that intersects with that point. 
